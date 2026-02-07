@@ -90,7 +90,7 @@ DATABASES = {
         'NAME': 'auth_demo',
         'USER': 'django_user',
         'PASSWORD': os.environ.get('DB_PASSWORD'),
-        'HOST': '127.0.0.1',
+        'HOST': '1.12.230.174',
         'PORT': '3306',
         'OPTIONS': {
             'charset': 'utf8mb4',
@@ -135,6 +135,7 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'static'
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
