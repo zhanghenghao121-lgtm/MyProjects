@@ -61,3 +61,31 @@ invoke方法：返回promptValue对象，解析占位符生成提示词invoke({"
 多模态RAG
 Graph RAG（知识图谱）
 Agent RAG（智能体）
+
+
+```
+project-root/
+├─ public/                # 静态资源（不经过打包）
+│  ├─ images/             # 图片资源
+│  │  └─ logo.png
+│  └─ favicon.ico
+├─ src/
+│  ├─ assets/             # 项目资源（可被打包）
+│  │  ├─ css/
+│  │  │  └─ custom.css    # 自定义样式
+│  │  ├─ js/
+│  │  │  └─ custom.js     # 自定义 JS
+│  │  └─ images/
+│  │     └─ bg.jpg
+│  ├─ api/
+│  │  └─ http.js          # Axios 或封装请求
+│  ├─ views/
+│  │  └─ Login.vue
+│  ├─ stores/
+│  │  └─ user.js
+│  ├─ App.vue
+│  ├─ main.js
+│  └─ router.js
+├─ package.json
+└─ vite.config.js
+```
