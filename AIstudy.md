@@ -89,3 +89,5 @@ project-root/
 ├─ package.json
 └─ vite.config.js
 ```
+爬取动漫资源网站：https://acg.rip/
+https://acg.rip/?term=输入的搜索关键词

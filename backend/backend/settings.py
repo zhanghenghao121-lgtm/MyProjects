@@ -27,13 +27,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() == "true"
 
 ALLOWED_HOSTS = [
-    "127.0.0.1",
-    "localhost",
-    "1.12.230.174",
-    "192.168.5.22"
+    h.strip()
+    for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",")
+    if h.strip()
 ]
 
 
@@ -50,6 +49,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'users',
+    'acg',
 ]
 
 MIDDLEWARE = [
@@ -93,8 +93,8 @@ DATABASES = {
         'NAME': os.environ.get('DB_NAME'),
         'USER': os.environ.get('DB_USER'),
         'PASSWORD': os.environ.get('DB_PASSWORD'),
-        'HOST': os.environ.get('DB_HOST'),
-        'PORT': os.environ.get('DB_PORT'),
+        'HOST': os.environ.get('DB_HOST',"host.docker.internal"),
+        'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
         }
@@ -144,5 +144,37 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
+CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# Allow session/CSRF cookies to be sent with cross-site AJAX (frontend on different port).
+SESSION_COOKIE_SAMESITE = 'None'
+CSRF_COOKIE_SAMESITE = 'None'
+
+# Dev over HTTP; set to True if you serve over HTTPS in production.
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
+
 AUTH_USER_MODEL = 'users.User'
 
+# qBittorrent Web API
+QBT_BASE_URL = os.environ.get('QBT_BASE_URL', 'http://127.0.0.1:8080')
+QBT_USERNAME = os.environ.get('QBT_USERNAME', '')
+QBT_PASSWORD = os.environ.get('QBT_PASSWORD', '')
+# Directory where qBittorrent saves completed downloads
+QBT_DOWNLOAD_DIR = os.environ.get('QBT_DOWNLOAD_DIR', '')
+
+# Email
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.163.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 465))
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'zhh_2000512@163.com')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'TUbaaCK5ybySErz9')
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'True') == 'True'
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'False') == 'True'
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', f'Your App <{EMAIL_HOST_USER}>')
+if not DEFAULT_FROM_EMAIL:
+    DEFAULT_FROM_EMAIL = EMAIL_HOST_USER

@@ -1,8 +1,6 @@
-#!/Users/zhanghenghao/Documents/codeProjects/MyProjects/venv1/bin/python3.12
-# -*- coding: utf-8 -*-
-import re
+#!/Users/zhanghenghao/Documents/codeProjects/MyProjects/venv1/bin/python3
 import sys
 from django.core.management import execute_from_command_line
 if __name__ == '__main__':
-    sys.argv[0] = re.sub(r'(-script\.pyw|\.exe)?$', '', sys.argv[0])
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
     sys.exit(execute_from_command_line())
