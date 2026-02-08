@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'users',
     'acg',
+    'chat',
 ]
 
 MIDDLEWARE = [
@@ -142,6 +143,8 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'static'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 CORS_ALLOWED_ORIGINS = [
     o.strip()

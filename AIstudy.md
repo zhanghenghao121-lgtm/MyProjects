@@ -1,3 +1,20 @@
+docker:
+停止容器；docker compose down
+docker ps
+
+停止docker本身：
+systemctl stop docker
+systemctl status docker
+
+启动docker服务：
+systemctl start docker
+systemctl status docker
+
+docker compose up -d
+如果改了代码就用：docker compose up -d --build
+
+
+重新启动：docker compose up -d --build
 # AI学习：
 ## RAG
 Embedding：向量化

@@ -16,6 +16,8 @@ import re
 from PIL import Image, ImageDraw, ImageFont
 from django.middleware.csrf import get_token
 from django.core.signing import TimestampSigner, BadSignature, SignatureExpired
+from django.utils import timezone
+from datetime import timedelta
 
 User = get_user_model()
 EMAIL_CODE_TTL_SECONDS = 300
@@ -63,6 +65,25 @@ def _send_email_code(purpose, email, username=''):
     return code
 
 
+def _serialize_user_profile(user, request):
+    avatar_url = ''
+    if user.avatar:
+        avatar_url = request.build_absolute_uri(user.avatar.url)
+    days_remaining = 0
+    if user.username_changed_at:
+        next_change = user.username_changed_at + timedelta(days=30)
+        if next_change > timezone.now():
+            days_remaining = (next_change - timezone.now()).days + 1
+    return {
+        'username': user.username,
+        'email': user.email,
+        'signature': user.signature or '',
+        'animerole': user.animerole or 'npc',
+        'avatar_url': avatar_url,
+        'username_change_days_remaining': max(0, days_remaining),
+    }
+
+
 def _get_user_from_token(request):
     """Extract user from Bearer token, return None if missing/invalid."""
     auth_header = request.headers.get('Authorization', '')
@@ -71,7 +92,7 @@ def _get_user_from_token(request):
         try:
             token_obj = AuthToken.objects.select_related('user').get(key=token_key)
             return token_obj.user
-        except AuthToken.DoesNotExist:
+        except Exception:
             return None
     return None
 
@@ -151,13 +172,65 @@ def login_view(request):
 #校验
 @api_view(['GET'])
 def profile(request):
-    user = request.user if request.user.is_authenticated else _get_user_from_token(request)
+    # SPA uses Bearer token primarily; keep session auth as fallback.
+    user = _get_user_from_token(request)
+    if not user and request.user.is_authenticated:
+        user = request.user
     if not user:
         return Response({'msg': '未登录'}, status=401)
 
-    return Response({
-        'username': user.username
-    })
+    if not user.email:
+        user.email = f"{random.randint(100000000, 999999999)}@163.com"
+        user.save(update_fields=['email'])
+
+    return Response(_serialize_user_profile(user, request))
+
+
+@api_view(['POST'])
+def update_profile(request):
+    user = _get_user_from_token(request)
+    if not user and request.user.is_authenticated:
+        user = request.user
+    if not user:
+        return Response({'msg': '未登录'}, status=401)
+
+    new_username = (request.data.get('username') or '').strip()
+    signature = (request.data.get('signature') or '').strip()
+    animerole = (request.data.get('animerole') or '').strip()
+    avatar = request.FILES.get('avatar')
+
+    if not new_username:
+        return Response({'msg': '用户名不能为空'}, status=400)
+    if not _is_valid_username(new_username):
+        return Response({'msg': '用户名只能包含中英文和数字，不能有空格或特殊符号'}, status=400)
+    if len(signature) > 20:
+        return Response({'msg': '个性签名不能超过20个字'}, status=400)
+    if not animerole:
+        animerole = 'npc'
+    if len(animerole) > 20:
+        return Response({'msg': '角色名不能超过20个字'}, status=400)
+    if not USERNAME_PATTERN.fullmatch(animerole):
+        return Response({'msg': '角色名只能包含中英文和数字，不能有空格或特殊符号'}, status=400)
+
+    if avatar and avatar.size > 5 * 1024 * 1024:
+        return Response({'msg': '头像大小不能超过5MB'}, status=400)
+
+    if new_username != user.username:
+        if user.username_changed_at and user.username_changed_at + timedelta(days=30) > timezone.now():
+            remaining = (user.username_changed_at + timedelta(days=30) - timezone.now()).days + 1
+            return Response({'msg': f'用户名每月只能修改一次，还需等待{remaining}天'}, status=400)
+        if User.objects.exclude(id=user.id).filter(username=new_username).exists():
+            return Response({'msg': '用户名已存在'}, status=400)
+        user.username = new_username
+        user.username_changed_at = timezone.now()
+
+    user.signature = signature
+    user.animerole = animerole
+    if avatar:
+        user.avatar = avatar
+    user.save()
+
+    return Response({'msg': '保存成功', 'profile': _serialize_user_profile(user, request)})
 
 
 #退出登录

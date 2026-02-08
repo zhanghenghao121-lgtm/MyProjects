@@ -4,8 +4,10 @@ import uuid
 
 
 class User(AbstractUser):
-    """Custom user model (currently no extra fields)."""
-    pass
+    signature = models.CharField(max_length=20, blank=True, default='')
+    animerole = models.CharField(max_length=20, default='npc')
+    avatar = models.ImageField(upload_to='avatars/', blank=True, null=True)
+    username_changed_at = models.DateTimeField(blank=True, null=True)
 
 
 class AuthToken(models.Model):
