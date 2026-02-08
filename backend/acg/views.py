@@ -99,12 +99,15 @@ def list_resources(request):
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": ACG_BASE_URL,
     }
-    resp = requests.get(
-        f"{ACG_BASE_URL}/",
-        headers=headers,
-        params={"term": keyword},
-        timeout=15,
-    )
+    try:
+        resp = requests.get(
+            f"{ACG_BASE_URL}/",
+            headers=headers,
+            params={"term": keyword},
+            timeout=15,
+        )
+    except requests.RequestException as e:
+        return Response({"msg": f"抓取失败: {e}"}, status=502)
     if resp.status_code != 200:
         return Response({"msg": "抓取失败"}, status=502)
 
