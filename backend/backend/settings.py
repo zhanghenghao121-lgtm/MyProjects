@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'users',
     'acg',
     'chat',
+    'channels',
 ]
 
 MIDDLEWARE = [
@@ -175,6 +176,13 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-csrftoken",
 ]
 
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [("redis", 6379)]},
+    }
+}
+
 # Allow session/CSRF cookies to be sent with cross-site AJAX (frontend on different port).
 SESSION_COOKIE_SAMESITE = 'None'
 CSRF_COOKIE_SAMESITE = 'None'
@@ -184,6 +192,7 @@ SESSION_COOKIE_SECURE = False
 CSRF_COOKIE_SECURE = False
 
 AUTH_USER_MODEL = 'users.User'
+ASGI_APPLICATION='backend.asgi.application'
 
 # qBittorrent Web API
 QBT_BASE_URL = os.environ.get('QBT_BASE_URL', 'http://127.0.0.1:8080')

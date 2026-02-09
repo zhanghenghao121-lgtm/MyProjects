@@ -1,15 +1,52 @@
 version: "3.9"
 
 services:
-  web:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"   # 只用于你临时调试；稳定后可删掉，别对公网开放
+
+  daphne:
     build: .
-    container_name: django_web
+    container_name: django_daphne
     restart: always
     env_file:
       - .env
-    ports:
-      - "8000:8000"
     environment:
       - HTTP_PROXY=http://172.17.0.1:7890
       - HTTPS_PROXY=http://172.17.0.1:7890
       - NO_PROXY=localhost,127.0.0.1
+    depends_on:
+      - redis
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             daphne -b 0.0.0.0 -p 8000 backend.asgi:application"
+    expose:
+      - "8000"
+    volumes:
+      - static_data:/app/static
+      - media_data:/app/media
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx
+    restart: always
+    depends_on:
+      - daphne
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+      - static_data:/static:ro
+      - media_data:/media:ro
+
+volumes:
+  redis_data:
+  static_data:
+  media_data:
