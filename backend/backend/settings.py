@@ -185,7 +185,7 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-csrftoken",
 ]
 
-CHAT_REDIS_HOST = os.environ.get('CHAT_REDIS_HOST', '127.0.0.1')
+CHAT_REDIS_HOST = os.environ.get('CHAT_REDIS_HOST', 'redis' if RUNNING_IN_DOCKER else '127.0.0.1')
 CHAT_REDIS_PORT = int(os.environ.get('CHAT_REDIS_PORT', 6379))
 PUBLIC_BACKEND_BASE_URL = os.environ.get('PUBLIC_BACKEND_BASE_URL', 'http://localhost:8000')
 
