@@ -12,9 +12,7 @@ services:
       MARIADB_ROOT_PASSWORD: Zhang2000
       TZ: Asia/Shanghai
     volumes:
-      - mariadb_data:/var/lib/mysql
-    ports:
-      - "3306:3306"   # 只用于临时调试；稳定后建议删掉，别对公网开放
+      - mariadb_data:/var/lib/mysql  # 只用于临时调试；稳定后建议删掉，别对公网开放
   redis:
     image: redis:7-alpine
     container_name: redis
