@@ -55,6 +55,8 @@ INSTALLED_APPS = [
     'users',
     'acg',
     'chat',
+    'aichat',
+    'aihotspot',
     'channels',
 ]
 
@@ -176,10 +178,14 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-csrftoken",
 ]
 
+CHAT_REDIS_HOST = os.environ.get('CHAT_REDIS_HOST', '127.0.0.1')
+CHAT_REDIS_PORT = int(os.environ.get('CHAT_REDIS_PORT', 6379))
+PUBLIC_BACKEND_BASE_URL = os.environ.get('PUBLIC_BACKEND_BASE_URL', 'http://localhost:8000')
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [("redis", 6379)]},
+        "CONFIG": {"hosts": [(CHAT_REDIS_HOST, CHAT_REDIS_PORT)]},
     }
 }
 

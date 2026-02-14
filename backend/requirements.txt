@@ -1,43 +1,28 @@
-asgiref==3.11.1
-attrs==25.4.0
-autobahn==25.12.2
-Automat==25.4.16
-beautifulsoup4==4.14.3
-cbor2==5.8.0
-certifi==2026.1.4
-cffi==2.0.0
+# Core web stack
+Django==5.2.11
+djangorestframework==3.16.1
+django-cors-headers==4.9.0
+python-dotenv==1.2.1
+
+# ASGI / websocket
 channels==4.3.2
 channels_redis==4.3.0
-charset-normalizer==3.4.4
-constantly==23.10.4
-cryptography==46.0.4
 daphne==4.2.1
-Django==5.2.11
-django-cors-headers==4.9.0
-djangorestframework==3.16.1
-gunicorn==25.0.1
-hyperlink==21.0.0
-idna==3.11
-Incremental==24.11.0
-msgpack==1.1.2
+
+# Database
 mysqlclient==2.2.7
-packaging==26.0
-pillow==12.1.0
-py-ubjson==0.16.1
-pyasn1==0.6.2
-pyasn1_modules==0.4.2
-pycparser==3.0
-PyMySQL==1.1.2
-pyOpenSSL==25.3.0
-python-dotenv==1.2.1
-redis==7.1.0
+
+# Common app libs
 requests==2.32.5
-service-identity==24.2.0
-soupsieve==2.8.3
-sqlparse==0.5.5
-Twisted==25.5.0
-txaio==25.12.2
-typing_extensions==4.15.0
-ujson==5.11.0
-urllib3==2.6.3
-zope.interface==8.2
+beautifulsoup4==4.14.3
+pillow==12.1.0
+
+# RAG / vector db
+chromadb==1.1.1
+langchain==0.3.27
+langchain-chroma==0.2.6
+langchain-community==0.3.31
+langchain-text-splitters==0.3.11
+pypdf==6.1.3
+docx2txt==0.9
+sentence-transformers==3.0.1

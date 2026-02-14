@@ -24,6 +24,8 @@ urlpatterns = [
     path('api/', include('users.urls')),
     path('api/acg/', include('acg.urls')),
     path('api/chat/', include('chat.urls')),
+    path('api/aichat/', include('aichat.urls')),
+    path('api/aihotspot/', include('aihotspot.urls')),
 ]
 
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

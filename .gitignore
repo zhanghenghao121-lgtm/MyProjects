@@ -5,7 +5,17 @@ __pycache__/
 *.pyd
 
 # venv
-venv1/
+/venv1/
 .env*
 vue-project/
 
+# OS/editor junk
+.DS_Store
+.vscode/
+.idea/
+
+# local agent data
+.agents/
+
+# runtime uploads
+backend/media/
