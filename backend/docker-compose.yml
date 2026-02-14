@@ -6,10 +6,10 @@ services:
     container_name: mariadb
     restart: always
     environment:
-      MARIADB_DATABASE: your_db
-      MARIADB_USER: your_user
-      MARIADB_PASSWORD: your_pass
-      MARIADB_ROOT_PASSWORD: your_root_pass
+      MARIADB_DATABASE: zy_data
+      MARIADB_USER: django_user
+      MARIADB_PASSWORD: Zhang2000
+      MARIADB_ROOT_PASSWORD: Zhang2000
       TZ: Asia/Shanghai
     volumes:
       - mariadb_data:/var/lib/mysql
