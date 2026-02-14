@@ -1,4 +1,33 @@
+requirements.txt安装：pip install -r requirements.txt
+后端启动：daphne -b 127.0.0.1 -p 8000 backend.asgi:application
 docker:
+```
+git pull
+docker compose down
+docker compose up -d --build
+docker compose exec django python manage.py migrate
+docker compose exec django python manage.py collectstatic --noinput
+```
+制作脚本：./deploy.sh
+
+```
+cat > deploy.sh <<'EOF'
+set -e
+
+git pull
+
+docker compose down
+docker compose up -d --build
+
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py collectstatic --noinput
+
+docker compose ps
+EOF
+
+chmod +x deploy.sh
+```
+
 停止容器；docker compose down
 docker ps
 
@@ -12,9 +41,10 @@ systemctl status docker
 
 docker compose up -d
 如果改了代码就用：docker compose up -d --build
+改了数据库：docker compose exec django python manage.py migrate
 
 
-重新启动：docker compose up -d --build
+Daphne
 # AI学习：
 ## RAG
 Embedding：向量化
@@ -108,3 +138,5 @@ project-root/
 ```
 爬取动漫资源网站：https://acg.rip/
 https://acg.rip/?term=输入的搜索关键词
+
+# 迁移服务器
