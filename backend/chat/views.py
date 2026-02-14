@@ -41,6 +41,7 @@ def _serialize_message(request, msg: ChatMessage):
         'type': msg.message_type,
         'content': msg.content or '',
         'image_url': image_url,
+        'reply_preview': msg.reply_preview or '',
         'created_at': msg.created_at.isoformat(),
         'user': {
             'id': msg.user_id,

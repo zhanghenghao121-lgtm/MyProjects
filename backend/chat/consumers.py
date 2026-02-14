@@ -85,6 +85,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         action = (payload.get('action') or '').strip()
         if action == 'send_text':
             content = (payload.get('content') or '').strip()
+            reply_preview = self._clean_reply_preview(payload.get('reply_preview'))
             if not content:
                 await self.send(text_data=json.dumps({
                     'type': 'error',
@@ -94,7 +95,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 return
             if len(content) > 1000:
                 content = content[:1000]
-            msg = await self._create_text_message(content)
+            msg = await self._create_text_message(content, reply_preview)
             await self.channel_layer.group_send(
                 ROOM_GROUP,
                 {'type': 'chat.message', 'message': msg},
@@ -103,11 +104,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         if action == 'send_image':
             image_url = (payload.get('image_url') or '').strip()
+            reply_preview = self._clean_reply_preview(payload.get('reply_preview'))
             if not image_url:
                 return
             if len(image_url) > 1000:
                 return
-            msg = await self._create_image_message(image_url)
+            msg = await self._create_image_message(image_url, reply_preview)
             await self.channel_layer.group_send(
                 ROOM_GROUP,
                 {'type': 'chat.message', 'message': msg},
@@ -141,6 +143,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             },
         }))
 
+    def _clean_reply_preview(self, value):
+        text = (value or '').strip()
+        if len(text) > 120:
+            text = text[:120]
+        return text
+
     def _extract_token(self):
         query_string = self.scope.get('query_string', b'').decode('utf-8')
         params = parse_qs(query_string)
@@ -156,22 +164,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return None
 
     @database_sync_to_async
-    def _create_text_message(self, content):
+    def _create_text_message(self, content, reply_preview=''):
         msg = ChatMessage.objects.create(
             user=self.user,
             animerole=self.animerole,
             message_type=ChatMessage.TYPE_TEXT,
             content=content,
+            reply_preview=reply_preview,
         )
         return self._serialize_message(msg)
 
     @database_sync_to_async
-    def _create_image_message(self, image_url):
+    def _create_image_message(self, image_url, reply_preview=''):
         msg = ChatMessage.objects.create(
             user=self.user,
             animerole=self.animerole,
             message_type=ChatMessage.TYPE_IMAGE,
             image_url=image_url,
+            reply_preview=reply_preview,
         )
         return self._serialize_message(msg)
 
@@ -184,6 +194,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'type': msg.message_type,
             'content': msg.content or '',
             'image_url': _abs_url(image_url),
+            'reply_preview': msg.reply_preview or '',
             'created_at': msg.created_at.isoformat(),
             'user': {
                 'id': msg.user_id,

@@ -24,6 +24,7 @@ class ChatMessage(models.Model):
     content = models.TextField(blank=True, default='')
     image = models.ImageField(upload_to='chat/images/', blank=True, null=True)
     image_url = models.CharField(max_length=1000, blank=True, default='')
+    reply_preview = models.CharField(max_length=120, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
