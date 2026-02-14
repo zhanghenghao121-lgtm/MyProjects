@@ -95,13 +95,20 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+RUNNING_IN_DOCKER = os.path.exists("/.dockerenv")
+default_db_host = "mariadb" if RUNNING_IN_DOCKER else "127.0.0.1"
+db_host = os.environ.get('DB_HOST', default_db_host)
+# If local process accidentally reuses docker-only host, fall back to localhost.
+if db_host == "mariadb" and not RUNNING_IN_DOCKER:
+    db_host = "127.0.0.1"
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.environ.get('DB_NAME'),
         'USER': os.environ.get('DB_USER'),
         'PASSWORD': os.environ.get('DB_PASSWORD'),
-        'HOST': os.environ.get('DB_HOST',"host.docker.internal"),
+        'HOST': db_host,
         'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',

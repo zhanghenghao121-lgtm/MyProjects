@@ -9,6 +9,7 @@ from django.core.mail import send_mail
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
 from django.conf import settings
+import os
 import random
 import io
 import base64
@@ -23,6 +24,7 @@ User = get_user_model()
 EMAIL_CODE_TTL_SECONDS = 300
 USERNAME_PATTERN = re.compile(r'^[A-Za-z0-9\u4e00-\u9fff]+$')
 PASSWORD_PATTERN = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{6,}$')
+CAPTCHA_SESSION_FALLBACK = os.environ.get('CAPTCHA_SESSION_FALLBACK', 'false').lower() == 'true'
 
 
 def _normalize_email(email):
@@ -154,10 +156,12 @@ def login_view(request):
             is_captcha_ok = str(captcha).strip() == str(signed_code)
         except (BadSignature, SignatureExpired):
             is_captcha_ok = False
-    if not is_captcha_ok:
+    if not is_captcha_ok and CAPTCHA_SESSION_FALLBACK:
         session_code = request.session.get('captcha_code')
         if not session_code or not captcha or str(captcha).strip() != str(session_code):
             return Response({'msg': '验证码错误'}, status=400)
+    elif not is_captcha_ok:
+        return Response({'msg': '验证码错误或已过期，请刷新验证码重试'}, status=400)
 
     user = authenticate(username=username, password=password)
     if not user:
@@ -249,7 +253,12 @@ def logout_view(request):
 def captcha(request):
     """生成数字验证码并以 base64 图片返回，同时将验证码存入 session。"""
     code = ''.join(random.choices('0123456789', k=4))
-    request.session['captcha_code'] = code
+    # Default flow uses signed captchaToken to avoid DB session dependency.
+    if CAPTCHA_SESSION_FALLBACK:
+        try:
+            request.session['captcha_code'] = code
+        except Exception:
+            pass
     signer = TimestampSigner()
     captcha_token = signer.sign(code)
 
@@ -262,10 +271,13 @@ def captcha(request):
     except Exception:
         font = ImageFont.load_default()
 
-    # 居中显示验证码
-    bbox = draw.textbbox((0, 0), code, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
+    # Pillow compatibility: textbbox may vary across versions/fonts.
+    try:
+        bbox = draw.textbbox((0, 0), code, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+    except Exception:
+        text_width, text_height = draw.textsize(code, font=font)
     x = (width - text_width) / 2
     y = (height - text_height) / 2
     draw.text((x, y), code, fill=(34, 34, 34), font=font)
