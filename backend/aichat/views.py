@@ -8,7 +8,6 @@ from django.core.files.storage import default_storage
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from users.models import AuthToken
-from .rag import owner_stats, rebuild_local_docs, search_relevant
 from common.cos_utils import upload_file_to_cos
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
@@ -259,52 +258,17 @@ class ChatAPIView(APIView):
             else:
                 trimmed_messages.append({"role": "user", "content": merged_user_text})
 
-        rag_docs = []
-        rag_error = ""
-        try:
-            rag_docs = search_relevant(user.id, user_text)
-        except Exception as exc:
-            rag_error = str(exc)
-
-        context_block = ""
-        if rag_docs:
-            lines = []
-            for idx, doc in enumerate(rag_docs, start=1):
-                source = (doc.metadata or {}).get("source_name", "unknown")
-                page = (doc.metadata or {}).get("page")
-                page_info = f", page={page}" if page is not None else ""
-                content = (doc.page_content or "").strip().replace("\n\n", "\n")
-                # Keep context concise and structured for the model.
-                content = content[:1200]
-                lines.append(f"[{idx}] source={source}{page_info}\n{content}")
-            context_block = "\n\n".join(lines)
-
         system_prompt_text = (
             "你是章鱼助手。请输出专业、简洁、结构化答案，不要角色扮演和口癖。"
             "若用户问参数/规格，优先使用表格；若信息不足，明确标记“资料未提供”。"
-            "不要复述原始检索片段，不要输出 'source=' 这类中间格式。"
             "若用户上传了图片/文件，消息里会给出附件信息和链接，你要结合附件信息与用户文字一起回答。"
         )
-        if context_block:
-            system_prompt_text += (
-                "\n\n以下是从知识库检索到的资料片段。你必须优先依据这些资料回答，"
-                "不要捏造未出现的参数；不确定时明确写“资料未提供该项”。"
-                "当问题包含“型号/编号/参数/规格/尺寸”等词时，必须先从片段逐项抽取后再回答，"
-                "不能直接给出“没有信息”的结论。"
-                "\n\n请按以下格式输出："
-                "\n1) 结论"
-                "\n2) 关键参数（可用表格）"
-                "\n3) 缺失信息（若有）"
-                "\n\n知识库片段如下：\n"
-                f"{context_block}"
-            )
-        elif rag_error:
-            system_prompt_text += f"\n\n[检索系统提示] 当前知识库检索失败：{rag_error}"
-        else:
-            system_prompt_text += (
-                "\n\n当前未检索到相关知识库片段。请明确告知“未在知识库命中相关内容”，"
-                "并引导用户提供文档中的关键词、型号或补充资料。"
-            )
+        system_prompt_text += (
+            "\n\n请按以下格式输出："
+            "\n1) 结论"
+            "\n2) 关键参数（可用表格）"
+            "\n3) 缺失信息（若有）"
+        )
 
         system_prompt = {
             "role": "system",
@@ -367,26 +331,3 @@ class ChatAPIView(APIView):
             return Response({"msg": "调用 deepseek 超时"}, status=504)
         except Exception as exc:
             return Response({"msg": str(exc)}, status=500)
-
-
-class RagStatsAPIView(APIView):
-    def get(self, request):
-        user = _resolve_user(request)
-        if not user:
-            return Response({"msg": "未登录"}, status=401)
-        try:
-            return Response(owner_stats(user.id))
-        except Exception as exc:
-            return Response({"msg": f"获取知识库状态失败: {exc}"}, status=500)
-
-
-class RagRebuildAPIView(APIView):
-    def post(self, request):
-        user = _resolve_user(request)
-        if not user:
-            return Response({"msg": "未登录"}, status=401)
-        try:
-            result = rebuild_local_docs()
-            return Response({"msg": "RAG 向量库重建完成", **result})
-        except Exception as exc:
-            return Response({"msg": f"RAG 重建失败: {exc}"}, status=500)
