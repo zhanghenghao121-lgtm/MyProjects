@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from users.models import AuthToken
 from .rag import owner_stats, rebuild_local_docs, search_relevant
+from common.cos_utils import upload_file_to_cos
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -150,7 +151,15 @@ class ChatAPIView(APIView):
         file_name = f"aichat/{subdir}/{uuid.uuid4().hex}.{ext}"
         saved_path = default_storage.save(file_name, upload)
         file_url = request.build_absolute_uri(default_storage.url(saved_path))
-        return file_url
+        # Try to mirror to COS for public access; fall back to local URL.
+        cos_url = None
+        try:
+            local_path = default_storage.path(saved_path)
+        except NotImplementedError:
+            local_path = None
+        if local_path:
+            cos_url = upload_file_to_cos(local_path, file_name)
+        return cos_url or file_url
 
     def _build_attachment_payload(self, request):
         notes = []

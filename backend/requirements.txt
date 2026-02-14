@@ -16,6 +16,7 @@ mysqlclient==2.2.7
 requests==2.32.5
 beautifulsoup4==4.14.3
 pillow==12.1.0
+cos-python-sdk-v5==1.9.32
 
 # RAG / vector db
 chromadb==1.1.1
