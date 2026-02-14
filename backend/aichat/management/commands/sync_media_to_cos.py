@@ -19,6 +19,12 @@ class Command(BaseCommand):
             default=None,
             help="Optional override for COS_UPLOAD_PREFIX (keeps MEDIA_ROOT relative path).",
         )
+        parser.add_argument(
+            "--exclude-prefix",
+            action="append",
+            default=[],
+            help="Exclude relative path prefixes under MEDIA_ROOT. Can be repeated.",
+        )
 
     def handle(self, *args, **options):
         media_root = getattr(settings, "MEDIA_ROOT", None)
@@ -32,12 +38,17 @@ class Command(BaseCommand):
 
         dry_run = options["dry_run"]
         prefix_override = options.get("prefix")
+        excludes = [p.strip("/").strip() for p in options.get("exclude_prefix", []) if p.strip()]
         total = uploaded = failed = 0
 
         for root, _, files in os.walk(media_root):
             for fname in files:
+                if fname.startswith("."):
+                    continue
                 local_path = Path(root) / fname
                 rel = local_path.relative_to(media_root).as_posix()
+                if any(rel.startswith(e) for e in excludes):
+                    continue
                 key = f"{prefix_override.strip('/')}/{rel}" if prefix_override else rel
                 total += 1
                 if dry_run:

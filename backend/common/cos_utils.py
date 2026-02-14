@@ -78,15 +78,32 @@ def upload_file_to_cos(local_path: str, key: Optional[str] = None) -> Optional[s
     cos_key = _build_key(key or path.name)
 
     try:
-        with path.open("rb") as fp:
-            client.put_object(Bucket=bucket, Body=fp, Key=cos_key)
+        threshold_mb = int(os.getenv("COS_MULTIPART_THRESHOLD_MB", "64"))
+        if path.stat().st_size >= threshold_mb * 1024 * 1024:
+            # Use multipart upload for large files to avoid long single-request stalls.
+            part_size = int(os.getenv("COS_MULTIPART_PART_MB", "8"))
+            max_thread = int(os.getenv("COS_MULTIPART_THREADS", "4"))
+            client.upload_file(
+                Bucket=bucket,
+                Key=cos_key,
+                LocalFilePath=str(path),
+                PartSize=part_size,
+                MAXThread=max_thread,
+            )
+        else:
+            with path.open("rb") as fp:
+                client.put_object(Bucket=bucket, Body=fp, Key=cos_key)
         # Prefer signed URL if bucket is private; fall back to public URL.
         if os.getenv("COS_SIGNED_URL", "true").lower() == "true":
             try:
                 expires = int(os.getenv("COS_SIGN_EXPIRES", "86400"))
             except ValueError:
                 expires = 86400
-            return client.get_object_url(Bucket=bucket, Key=cos_key, Expired=expires)
+            return client.get_presigned_download_url(
+                Bucket=bucket,
+                Key=cos_key,
+                Expired=expires,
+            )
         return build_public_url(cos_key)
     except (CosClientError, CosServiceError, Exception) as exc:  # noqa: BLE001
         logger.warning("Upload to COS failed for %s: %s", cos_key, exc)

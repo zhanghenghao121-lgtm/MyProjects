@@ -159,7 +159,14 @@ class ChatAPIView(APIView):
             local_path = None
         if local_path:
             cos_url = upload_file_to_cos(local_path, file_name)
-        return cos_url or file_url
+        cos_only = os.environ.get("COS_ONLY_MODE", "false").lower() == "true"
+        if cos_url:
+            if cos_only:
+                default_storage.delete(saved_path)
+            return cos_url
+        if cos_only:
+            raise RuntimeError("COS upload failed in COS_ONLY_MODE")
+        return file_url
 
     def _build_attachment_payload(self, request):
         notes = []
@@ -183,7 +190,10 @@ class ChatAPIView(APIView):
                 image_b64 = base64.b64encode(image_bytes).decode("utf-8")
                 image_data_url = f"data:{content_type};base64,{image_b64}"
 
-            image_url = self._save_upload(request, image, "images")
+            try:
+                image_url = self._save_upload(request, image, "images")
+            except RuntimeError:
+                return None, Response({"msg": "图片上传到 COS 失败，请稍后重试"}, status=502)
             notes.append(
                 f"[用户上传图片] 名称: {image.name}; 大小: {image.size} bytes; 链接: {image_url}"
             )
@@ -191,7 +201,10 @@ class ChatAPIView(APIView):
         if generic_file:
             if generic_file.size > MAX_FILE_SIZE:
                 return None, Response({"msg": "文件不能超过10MB"}, status=400)
-            file_url = self._save_upload(request, generic_file, "files")
+            try:
+                file_url = self._save_upload(request, generic_file, "files")
+            except RuntimeError:
+                return None, Response({"msg": "文件上传到 COS 失败，请稍后重试"}, status=502)
             notes.append(
                 f"[用户上传文件] 名称: {generic_file.name}; 大小: {generic_file.size} bytes; 链接: {file_url}"
             )
