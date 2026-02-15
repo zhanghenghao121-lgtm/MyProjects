@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 
 class Script(models.Model):
@@ -17,6 +18,13 @@ class Script(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "title"],
+                condition=Q(user__isnull=False),
+                name="uniq_script_title_per_user",
+            )
+        ]
 
     def __str__(self):
         return self.title

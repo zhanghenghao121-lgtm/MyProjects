@@ -2,9 +2,13 @@ import json
 import os
 import re
 import uuid
+import zipfile
+from io import BytesIO
+from xml.etree import ElementTree as ET
 
 import requests
 from django.core.files.storage import default_storage
+from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -23,6 +27,9 @@ SCRIPT_PARSE_MODEL = os.environ.get(
     os.environ.get("DOUBAO_CHAT_MODEL", "doubao-seed-2-0-mini-260215"),
 ).strip()
 DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY", "").strip()
+DOUBAO_TIMEOUT_SECONDS = int(os.environ.get("DOUBAO_TIMEOUT_SECONDS", "120"))
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_TEXT_LENGTH = 20000
 
 
 def _get_user_from_bearer(request):
@@ -253,8 +260,10 @@ def _serialize_scene(scene: ScriptScene):
 
 def _read_upload_text(upload):
     ext = (upload.name.rsplit(".", 1)[-1] if "." in upload.name else "").lower()
+    if ext == "docx":
+        return _read_docx_text(upload)
     if ext not in {"txt", "md"}:
-        raise ValueError("仅支持 .txt / .md 文件")
+        raise ValueError("仅支持 .txt / .md / .docx 文件")
     raw = upload.read()
     upload.seek(0)
     for enc in ("utf-8", "utf-8-sig", "gbk"):
@@ -263,6 +272,37 @@ def _read_upload_text(upload):
         except Exception:
             continue
     raise ValueError("文件编码无法识别，请使用 UTF-8 或 GBK")
+
+
+def _read_docx_text(upload):
+    raw = upload.read()
+    upload.seek(0)
+    try:
+        with zipfile.ZipFile(BytesIO(raw)) as docx:
+            xml_bytes = docx.read("word/document.xml")
+    except Exception:
+        raise ValueError("Word 文件解析失败，请上传有效的 .docx 文件")
+
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception:
+        raise ValueError("Word 文件内容损坏，请重新导出 .docx 后再试")
+
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    paragraphs = []
+    for p in root.findall(".//w:p", ns):
+        texts = []
+        for node in p.findall(".//w:t", ns):
+            if node.text:
+                texts.append(node.text)
+        line = "".join(texts).strip()
+        if line:
+            paragraphs.append(line)
+
+    content = "\n".join(paragraphs).strip()
+    if not content:
+        raise ValueError("Word 文件内容为空")
+    return content
 
 
 def _call_model(messages, temperature=0.2):
@@ -280,7 +320,7 @@ def _call_model(messages, temperature=0.2):
             "temperature": temperature,
             "stream": False,
         },
-        timeout=60,
+        timeout=DOUBAO_TIMEOUT_SECONDS,
     )
     if resp.status_code != 200:
         try:
@@ -313,10 +353,17 @@ def _extract_entities_with_ai(script_text: str):
     parsed = _extract_json_block(content)
     if not isinstance(parsed, dict):
         raise RuntimeError("实体提取格式异常")
+    raw_props = (
+        parsed.get("props")
+        or parsed.get("objects")
+        or parsed.get("items")
+        or parsed.get("item")
+        or []
+    )
     return {
         "characters": _normalize_name_list(parsed.get("characters") or []),
         "scenes": _normalize_name_list(parsed.get("scenes") or []),
-        "props": _normalize_name_list(parsed.get("props") or []),
+        "props": _normalize_name_list(raw_props),
     }
 
 
@@ -333,7 +380,8 @@ def _match_scene_image(scene_desc: str, scene_images: dict):
             continue
         if key in desc or desc in key:
             return url
-    return ""
+    # fallback: if names cannot be matched, still use first uploaded scene image
+    return next((v for v in scene_images.values() if v), "")
 
 
 def _parse_script_with_ai(script_text: str, user_prompt: str, entities: dict):
@@ -466,10 +514,18 @@ def upload_script(request):
 
     if not content:
         return Response({"msg": "请上传剧本文件或输入剧本文本"}, status=400)
+    if len(content) >= MAX_TEXT_LENGTH:
+        return Response({"msg": "剧本文本必须小于20000字"}, status=400)
     if not title:
         title = "未命名剧本"
+    trimmed_title = title[:200]
+    if Script.objects.filter(user=user, title=trimmed_title).exists():
+        return Response({"msg": "剧本标题已存在，请更换标题"}, status=400)
 
-    script = Script.objects.create(user=user, title=title[:200], content=content)
+    try:
+        script = Script.objects.create(user=user, title=trimmed_title, content=content)
+    except IntegrityError:
+        return Response({"msg": "剧本标题已存在，请更换标题"}, status=400)
     return Response(
         {
             "script_id": script.id,
@@ -507,6 +563,8 @@ def parse_script(request, script_id):
         return Response({"msg": "无权限访问该剧本"}, status=403)
 
     user_prompt = (request.data.get("user_prompt") or "").strip()
+    if len(user_prompt) >= MAX_TEXT_LENGTH:
+        return Response({"msg": "用户追加提示词必须小于20000字"}, status=400)
     character_images = _normalize_image_map(_parse_dict_maybe(request.data.get("character_images")))
     scene_images = _normalize_image_map(_parse_dict_maybe(request.data.get("scene_images")))
     prop_images = _normalize_image_map(_parse_dict_maybe(request.data.get("prop_images")))
@@ -616,6 +674,39 @@ def update_scene(request, scene_id):
     return Response({"msg": "保存成功", "scene": _serialize_scene(scene)})
 
 
+@api_view(["GET"])
+def list_scripts(request):
+    user = _resolve_user(request)
+    if not user:
+        return Response({"msg": "未登录"}, status=401)
+
+    scripts = Script.objects.filter(user=user).only("id", "title", "created_at").order_by("-created_at")
+    return Response(
+        {
+            "scripts": [
+                {
+                    "script_id": row.id,
+                    "title": row.title,
+                    "created_at": row.created_at.isoformat(),
+                }
+                for row in scripts
+            ]
+        }
+    )
+
+
+@api_view(["DELETE"])
+def delete_script(request, script_id):
+    user = _resolve_user(request)
+    if not user:
+        return Response({"msg": "未登录"}, status=401)
+    script = get_object_or_404(Script, id=script_id)
+    if script.user_id and script.user_id != user.id:
+        return Response({"msg": "无权限删除该剧本"}, status=403)
+    script.delete()
+    return Response({"msg": "删除成功"})
+
+
 @api_view(["POST"])
 def upload_image(request):
     user = _resolve_user(request)
@@ -627,8 +718,8 @@ def upload_image(request):
     content_type = (getattr(image, "content_type", "") or "").lower()
     if not content_type.startswith("image/"):
         return Response({"msg": "仅支持图片文件"}, status=400)
-    if image.size > 10 * 1024 * 1024:
-        return Response({"msg": "图片大小不能超过10MB"}, status=400)
+    if image.size > MAX_IMAGE_BYTES:
+        return Response({"msg": "图片大小不能超过5MB"}, status=400)
     try:
         url = _save_upload_and_maybe_cos(request, image, "images")
     except RuntimeError as exc:
