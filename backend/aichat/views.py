@@ -14,6 +14,12 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_CHAT_MODEL = os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-chat")
 DEEPSEEK_VISION_MODEL = os.environ.get("DEEPSEEK_VISION_MODEL", "").strip()
+DOUBAO_API_URL = os.environ.get(
+    "DOUBAO_API_URL",
+    "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+).strip()
+DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY", "").strip()
+DOUBAO_CHAT_MODEL = os.environ.get("DOUBAO_CHAT_MODEL", "doubao-seed-2-0-mini-260215").strip()
 MAX_FILE_SIZE = 10 * 1024 * 1024
 MAX_IMAGE_SIZE = 500 * 1024 * 1024
 
@@ -83,46 +89,36 @@ def _parse_params_to_rows(text: str) -> list[tuple[str, str]]:
 
 def _normalize_reply_markdown(content: str) -> str:
     text = (content or "").strip()
-    # Redact knowledge-file names and boilerplate source disclosure wording.
     text = re.sub(r"\b[\w\-]+\.(docx|pdf|md|txt)\b", "知识文档", text, flags=re.IGNORECASE)
     text = text.replace("根据提供的资料，", "")
     text = text.replace("根据提供资料，", "")
     text = text.replace("根据资料，", "")
     if not text:
-        return "## 结论\n- 暂无有效回复内容。"
+        return "我这边暂时没拿到有效信息，你可以换个问法试试。"
 
-    conclusion = _extract_section(text, ("结论",))
-    params_text = _extract_section(text, ("关键参数", "参数", "规格"))
-    missing = _extract_section(text, ("缺失信息", "不足", "未提供"))
+    # Prefer natural plain-text output for chat bubbles.
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line in {"| --- | --- |", "---", "——"}:
+            continue
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = re.sub(r"^(\d+[\.\)]\s*|[-*]\s*)", "", line)
+        line = line.replace("**", "").replace("__", "")
+        if line:
+            lines.append(line)
 
-    if not conclusion:
-        # Fallback: first non-empty line as conclusion
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        conclusion = lines[0] if lines else "未检索到可用结论。"
-        body = "\n".join(lines[1:]).strip()
-        if body and not params_text:
-            params_text = body
+    plain = "\n".join(lines)
+    plain = re.sub(r"\n{3,}", "\n\n", plain)
+    plain = re.sub(r"[ \t]{2,}", " ", plain).strip()
 
-    rows = _parse_params_to_rows(params_text)
-    if not rows:
-        rows = [("说明", _strip_md_markers(params_text) if params_text else "资料未提供")]
+    if "|" in plain:
+        plain = plain.replace("|", " ")
+        plain = re.sub(r"[ ]{2,}", " ", plain).strip()
 
-    missing_text = _strip_md_markers(missing) if missing else "无"
-
-    table_lines = ["| 参数 | 值 |", "| --- | --- |"]
-    for k, v in rows:
-        kk = k.replace("|", "\\|")
-        vv = v.replace("|", "\\|")
-        table_lines.append(f"| {kk} | {vv} |")
-
-    return (
-        "## 结论\n"
-        f"- {_strip_md_markers(conclusion)}\n\n"
-        "## 关键参数\n"
-        f"{chr(10).join(table_lines)}\n\n"
-        "## 缺失信息\n"
-        f"- {missing_text}"
-    )
+    return plain or "我这边暂时没拿到有效信息，你可以换个问法试试。"
 
 
 class ChatAPIView(APIView):
@@ -167,7 +163,7 @@ class ChatAPIView(APIView):
             raise RuntimeError("COS upload failed in COS_ONLY_MODE")
         return file_url
 
-    def _build_attachment_payload(self, request):
+    def _build_attachment_payload(self, request, enable_vision=False):
         notes = []
         image_data_url = ""
         has_image = False
@@ -183,7 +179,7 @@ class ChatAPIView(APIView):
                 return None, Response({"msg": "发图片仅支持图片类型"}, status=400)
 
             # 仅在配置了视觉模型时才构造多模态内容。
-            if DEEPSEEK_VISION_MODEL:
+            if enable_vision:
                 image_bytes = image.read()
                 image.seek(0)
                 image_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -215,8 +211,44 @@ class ChatAPIView(APIView):
         if not user:
             return Response({"msg": "未登录"}, status=401)
 
-        if not DEEPSEEK_API_KEY:
-            return Response({"msg": "未配置 DEEPSEEK_API_KEY，请联系管理员"}, status=500)
+        role = (request.data.get("role") or "octopus").strip().lower()
+        role_configs = {
+            "octopus": {
+                "label": "章鱼",
+                "api_url": DEEPSEEK_API_URL,
+                "api_key": DEEPSEEK_API_KEY,
+                "chat_model": DEEPSEEK_CHAT_MODEL,
+                "vision_model": DEEPSEEK_VISION_MODEL,
+                "system_prompt": (
+                    "你是章鱼助手。用自然、口语化的中文回答，像真人聊天。"
+                    "先直接回答核心问题，默认控制在1-3句，避免冗长。"
+                    "非必要不要使用Markdown标题、表格、模板化分段。"
+                    "只有在用户明确要求时再分点。"
+                    "不确定就直说，不要编造。"
+                    "若用户上传了图片/文件，消息中会给出附件说明和链接，请结合用户问题一起回答。"
+                ),
+            },
+            "doubaoyu": {
+                "label": "豆包鱼",
+                "api_url": DOUBAO_API_URL,
+                "api_key": DOUBAO_API_KEY,
+                "chat_model": DOUBAO_CHAT_MODEL,
+                "vision_model": "",
+                "system_prompt": (
+                    "你是豆包鱼助手。用自然、口语化的中文回答，像真人聊天。"
+                    "先直接回答核心问题，默认控制在1-3句，避免冗长。"
+                    "非必要不要使用Markdown标题、表格、模板化分段。"
+                    "只有在用户明确要求时再分点。"
+                    "不确定就直说，不要编造。"
+                    "若用户上传了图片/文件，消息中会给出附件说明和链接，请结合用户问题一起回答。"
+                ),
+            },
+        }
+        role_config = role_configs.get(role)
+        if not role_config:
+            return Response({"msg": "不支持的角色"}, status=400)
+        if not role_config["api_key"]:
+            return Response({"msg": f"未配置 {role_config['label']} API Key，请联系管理员"}, status=500)
 
         messages = request.data.get("messages")
         if messages is None:
@@ -240,7 +272,10 @@ class ChatAPIView(APIView):
         if not trimmed_messages:
             trimmed_messages = [{"role": "user", "content": user_text}]
 
-        attachment_payload, attachment_error = self._build_attachment_payload(request)
+        attachment_payload, attachment_error = self._build_attachment_payload(
+            request,
+            enable_vision=bool(role_config["vision_model"]),
+        )
         if attachment_error:
             return attachment_error
         attachment_notes = attachment_payload["notes"]
@@ -258,24 +293,13 @@ class ChatAPIView(APIView):
             else:
                 trimmed_messages.append({"role": "user", "content": merged_user_text})
 
-        system_prompt_text = (
-            "你是章鱼助手。请输出专业、简洁、结构化答案，不要角色扮演和口癖。"
-            "若用户问参数/规格，优先使用表格；若信息不足，明确标记“资料未提供”。"
-            "若用户上传了图片/文件，消息里会给出附件信息和链接，你要结合附件信息与用户文字一起回答。"
-        )
-        system_prompt_text += (
-            "\n\n请按以下格式输出："
-            "\n1) 结论"
-            "\n2) 关键参数（可用表格）"
-            "\n3) 缺失信息（若有）"
-        )
-
+        system_prompt_text = role_config["system_prompt"]
         system_prompt = {
             "role": "system",
             "content": system_prompt_text,
         }
 
-        model_name = DEEPSEEK_VISION_MODEL if image_data_url else DEEPSEEK_CHAT_MODEL
+        model_name = role_config["vision_model"] if image_data_url else role_config["chat_model"]
 
         payload_messages = [system_prompt]
         for msg in trimmed_messages:
@@ -300,10 +324,10 @@ class ChatAPIView(APIView):
 
         try:
             resp = requests.post(
-                DEEPSEEK_API_URL,
+                role_config["api_url"],
                 json=payload,
                 headers={
-                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Authorization": f"Bearer {role_config['api_key']}",
                     "Content-Type": "application/json",
                 },
                 timeout=45,
@@ -328,6 +352,6 @@ class ChatAPIView(APIView):
             )
             return Response({"reply": _normalize_reply_markdown(content)})
         except requests.Timeout:
-            return Response({"msg": "调用 deepseek 超时"}, status=504)
+            return Response({"msg": f"调用 {role_config['label']} 超时"}, status=504)
         except Exception as exc:
             return Response({"msg": str(exc)}, status=500)

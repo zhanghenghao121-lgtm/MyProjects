@@ -248,3 +248,26 @@ class GithubHotProjectsAPIView(APIView):
                 }
             )
         return items
+
+
+class DouyinHotAPIView(APIView):
+    API_URL = "https://v2.xxapi.cn/api/douyinhot"
+
+    def get(self, request):
+        cache_key = "aihotspot:douyin:hot"
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
+
+        try:
+            resp = requests.get(self.API_URL, timeout=20)
+            resp.raise_for_status()
+            payload = resp.json() if resp.content else {}
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, list):
+                return Response({"msg": "抖音热点数据格式异常"}, status=502)
+            result = {"data": data}
+            cache.set(cache_key, result, timeout=120)
+            return Response(result)
+        except Exception as exc:
+            return Response({"msg": f"抖音热点拉取失败: {exc}"}, status=502)
