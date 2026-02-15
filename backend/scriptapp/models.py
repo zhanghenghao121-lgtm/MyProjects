@@ -27,6 +27,8 @@ class ScriptScene(models.Model):
     time_range = models.CharField(max_length=80, default="")
     characters = models.JSONField(default=list, blank=True)
     character_images = models.JSONField(default=dict, blank=True)
+    props = models.JSONField(default=list, blank=True)
+    prop_images = models.JSONField(default=dict, blank=True)
     scene_desc = models.TextField(default="", blank=True)
     prompt = models.TextField(default="", blank=True)
     scene_image_url = models.CharField(max_length=1200, default="", blank=True)

@@ -45,24 +45,210 @@ def _resolve_user(request):
 def _extract_json_block(raw: str):
     text = (raw or "").strip()
     if not text:
-        return []
+        return None
     try:
         return json.loads(text)
     except Exception:
         pass
-    fence = re.search(r"```(?:json)?\s*(\[[\s\S]*?\])\s*```", text, re.IGNORECASE)
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
     if fence:
         try:
             return json.loads(fence.group(1))
         except Exception:
             pass
-    array_block = re.search(r"(\[[\s\S]*\])", text)
-    if array_block:
+    obj_or_arr = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
+    if obj_or_arr:
         try:
-            return json.loads(array_block.group(1))
+            return json.loads(obj_or_arr.group(1))
         except Exception:
-            return []
-    return []
+            return None
+    return None
+
+
+def _parse_dict_maybe(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
+def _normalize_name_list(raw):
+    if isinstance(raw, str):
+        raw = [x.strip() for x in re.split(r"[，,、/|]", raw) if x.strip()]
+    if not isinstance(raw, list):
+        return []
+    items = []
+    for value in raw:
+        txt = str(value).strip()
+        if txt and txt not in items:
+            items.append(txt)
+    return items
+
+
+def _parse_time_range_seconds(time_range: str):
+    text = str(time_range or "").strip()
+    nums = [int(n) for n in re.findall(r"\d+", text)]
+    if len(nums) >= 2 and nums[1] > nums[0]:
+        return nums[0], nums[1]
+    return 0, 15
+
+
+def _normalize_shot_type(raw, text):
+    val = str(raw or "").strip()
+    merged = f"{val} {text or ''}"
+    base = "中景"
+    for candidate in ("远景", "中景", "近景", "特写"):
+        if candidate in merged:
+            base = candidate
+            break
+    if "过肩" in merged or "OTS" in merged.upper():
+        return f"{base}（过肩镜头 OTS）"
+    return base
+
+
+def _normalize_dynamic_elements(raw, fallback_text):
+    if isinstance(raw, str):
+        items = [x.strip() for x in re.split(r"[，,、/|；;]", raw) if x.strip()]
+    elif isinstance(raw, list):
+        items = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        items = []
+    if items:
+        return list(dict.fromkeys(items))
+
+    text = str(fallback_text or "")
+    inferred = []
+    keyword_pairs = [
+        (("云", "云层"), "云层缓慢流动"),
+        (("风", "衣角", "头发"), "风吹动头发与衣角"),
+        (("雾", "烟", "烟尘"), "雾气/烟尘缓慢变化"),
+        (("光", "光影"), "光影层次变化"),
+    ]
+    for keys, label in keyword_pairs:
+        if any(k in text for k in keys):
+            inferred.append(label)
+    if not inferred:
+        inferred.append("自然风动与环境光影变化")
+    return inferred
+
+
+def _normalize_beats(raw, start_sec, end_sec):
+    beats = []
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                s = item.get("start")
+                e = item.get("end")
+                content = str(item.get("content") or item.get("desc") or "").strip()
+                if isinstance(s, int) and isinstance(e, int) and e > s and content:
+                    beats.append((s, e, content))
+            elif isinstance(item, str):
+                m = re.match(r"\s*(\d+)\s*s?\s*[-~—–]\s*(\d+)\s*s?\s*[:：]\s*(.+)\s*$", item)
+                if m:
+                    s, e, content = int(m.group(1)), int(m.group(2)), m.group(3).strip()
+                    if e > s and content:
+                        beats.append((s, e, content))
+    elif isinstance(raw, str):
+        lines = [x.strip() for x in raw.splitlines() if x.strip()]
+        for line in lines:
+            m = re.match(r"\s*(\d+)\s*s?\s*[-~—–]\s*(\d+)\s*s?\s*[:：]\s*(.+)\s*$", line)
+            if m:
+                s, e, content = int(m.group(1)), int(m.group(2)), m.group(3).strip()
+                if e > s and content:
+                    beats.append((s, e, content))
+
+    if len(beats) >= 3:
+        beats = sorted(beats, key=lambda x: x[0])
+        return beats[:5]
+
+    # fallback to 4 continuous segments
+    duration = max(10, end_sec - start_sec)
+    b0 = start_sec
+    b1 = start_sec + round(duration * 0.2)
+    b2 = start_sec + round(duration * 0.47)
+    b3 = start_sec + round(duration * 0.8)
+    b4 = end_sec if end_sec > b3 else start_sec + duration
+    if not (b0 < b1 < b2 < b3 < b4):
+        b0, b1, b2, b3, b4 = 0, 3, 7, 12, 15
+    return [
+        (b0, b1, "建立空间与人物关系，主体进入画面并开始动作"),
+        (b1, b2, "主体动作推进，环境动态元素持续变化"),
+        (b2, b3, "情绪或对话核心动作展开，保持单一机位"),
+        (b3, b4, "动作收束并形成下个分镜的衔接势能"),
+    ]
+
+
+def _normalize_scene_item(item):
+    if not isinstance(item, dict):
+        return None
+    time_range = str(item.get("time_range") or item.get("time") or "").strip()
+    start_sec, end_sec = _parse_time_range_seconds(time_range)
+    source_scene = str(item.get("scene_desc") or item.get("scene") or "").strip()
+    source_prompt = str(item.get("prompt") or "").strip()
+    shot_type = _normalize_shot_type(item.get("shot_type"), f"{source_scene}\n{source_prompt}")
+    dynamic_elements = _normalize_dynamic_elements(
+        item.get("dynamic_elements"),
+        f"{source_scene}\n{source_prompt}",
+    )
+    beats = _normalize_beats(item.get("beats"), start_sec, end_sec)
+
+    beat_lines = [f"- {s}s-{e}s：{desc}" for s, e, desc in beats]
+    structured_scene_desc = (
+        f"镜头类型：{shot_type}\n"
+        f"场景动态元素：{' / '.join(dynamic_elements)}\n"
+        "分镜内容：\n"
+        + "\n".join(beat_lines)
+    )
+    structured_prompt = (
+        f"总时长：{start_sec}s-{end_sec}s\n"
+        f"镜头类型：{shot_type}\n"
+        f"场景动态元素：{' / '.join(dynamic_elements)}\n"
+        "分镜内容：\n"
+        + "\n".join(beat_lines)
+    )
+
+    return {
+        "time_range": time_range or f"{start_sec}-{end_sec}s",
+        "characters": _normalize_name_list(item.get("characters") or []),
+        "props": _normalize_name_list(item.get("props") or item.get("objects") or []),
+        "scene_desc": structured_scene_desc,
+        "prompt": structured_prompt,
+    }
+
+
+def _normalize_image_map(raw):
+    if not isinstance(raw, dict):
+        return {}
+    cleaned = {}
+    for key, value in raw.items():
+        k = str(key).strip()
+        v = str(value or "").strip()
+        if k:
+            cleaned[k] = v
+    return cleaned
+
+
+def _serialize_scene(scene: ScriptScene):
+    return {
+        "id": scene.id,
+        "script_id": scene.script_id,
+        "time_range": scene.time_range,
+        "prompt": scene.prompt,
+        "scene_desc": scene.scene_desc,
+        "scene_image_url": scene.scene_image_url,
+        "characters": scene.characters or [],
+        "character_images": scene.character_images or {},
+        "props": scene.props or [],
+        "prop_images": scene.prop_images or {},
+        "created_at": scene.created_at.isoformat(),
+        "updated_at": scene.updated_at.isoformat(),
+    }
 
 
 def _read_upload_text(upload):
@@ -79,75 +265,21 @@ def _read_upload_text(upload):
     raise ValueError("文件编码无法识别，请使用 UTF-8 或 GBK")
 
 
-def _normalize_scene_item(item):
-    if not isinstance(item, dict):
-        return None
-    time_range = str(item.get("time_range") or item.get("time") or "").strip()
-    raw_chars = item.get("characters") or []
-    if isinstance(raw_chars, str):
-        raw_chars = [c.strip() for c in re.split(r"[，,、/]", raw_chars) if c.strip()]
-    if not isinstance(raw_chars, list):
-        raw_chars = []
-    characters = []
-    for name in raw_chars:
-        txt = str(name).strip()
-        if txt and txt not in characters:
-            characters.append(txt)
-    scene_desc = str(item.get("scene_desc") or item.get("scene") or "").strip()
-    prompt = str(item.get("prompt") or "").strip()
-    scene_image_url = str(item.get("scene_image_url") or item.get("image_url") or "").strip()
-    return {
-        "time_range": time_range,
-        "characters": characters,
-        "scene_desc": scene_desc,
-        "prompt": prompt,
-        "scene_image_url": scene_image_url,
-    }
-
-
-def _serialize_scene(scene: ScriptScene):
-    return {
-        "id": scene.id,
-        "script_id": scene.script_id,
-        "time_range": scene.time_range,
-        "characters": scene.characters or [],
-        "character_images": scene.character_images or {},
-        "scene_desc": scene.scene_desc,
-        "prompt": scene.prompt,
-        "scene_image_url": scene.scene_image_url,
-        "user_remark": scene.user_remark,
-        "created_at": scene.created_at.isoformat(),
-        "updated_at": scene.updated_at.isoformat(),
-    }
-
-
-def _parse_script_with_ai(script_text: str):
+def _call_model(messages, temperature=0.2):
     if not DOUBAO_API_KEY:
         raise RuntimeError("未配置 DOUBAO_API_KEY")
-    if not script_text.strip():
-        raise RuntimeError("剧本文本为空")
-    prompt = (
-        "你是专业分镜编剧助手。请把用户提供的剧本拆分为多个约15秒的分镜段。"
-        "仅返回 JSON 数组，不要附加解释，不要 markdown。"
-        "每个元素必须包含字段：time_range, characters(数组), scene_desc, prompt, scene_image_url。"
-        "scene_image_url 若无可留空字符串。"
-    )
-    payload = {
-        "model": SCRIPT_PARSE_MODEL,
-        "messages": [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": script_text},
-        ],
-        "temperature": 0.2,
-        "stream": False,
-    }
     resp = requests.post(
         DOUBAO_API_URL,
         headers={
             "Authorization": f"Bearer {DOUBAO_API_KEY}",
             "Content-Type": "application/json",
         },
-        json=payload,
+        json={
+            "model": SCRIPT_PARSE_MODEL,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        },
         timeout=60,
     )
     if resp.status_code != 200:
@@ -155,16 +287,127 @@ def _parse_script_with_ai(script_text: str):
             err = resp.json().get("error", {}).get("message") or resp.text
         except Exception:
             err = resp.text
-        raise RuntimeError(f"模型解析失败: {err or 'unknown error'}")
-    content = (
+        raise RuntimeError(f"模型调用失败: {err or 'unknown error'}")
+    return (
         resp.json()
         .get("choices", [{}])[0]
         .get("message", {})
         .get("content", "")
     )
+
+
+def _extract_entities_with_ai(script_text: str):
+    prompt = (
+        "你是剧本结构提取助手。"
+        "请从剧本文本中提取：人物、场景、物品。"
+        "只返回 JSON 对象，不要任何解释。格式："
+        '{"characters":[""],"scenes":[""],"props":[""]}'
+    )
+    content = _call_model(
+        [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": script_text},
+        ],
+        temperature=0.1,
+    )
+    parsed = _extract_json_block(content)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("实体提取格式异常")
+    return {
+        "characters": _normalize_name_list(parsed.get("characters") or []),
+        "scenes": _normalize_name_list(parsed.get("scenes") or []),
+        "props": _normalize_name_list(parsed.get("props") or []),
+    }
+
+
+def _match_scene_image(scene_desc: str, scene_images: dict):
+    if not scene_images:
+        return ""
+    desc = (scene_desc or "").strip()
+    if not desc:
+        return next((v for v in scene_images.values() if v), "")
+    if desc in scene_images and scene_images[desc]:
+        return scene_images[desc]
+    for key, url in scene_images.items():
+        if not url:
+            continue
+        if key in desc or desc in key:
+            return url
+    return ""
+
+
+def _parse_script_with_ai(script_text: str, user_prompt: str, entities: dict):
+    entity_text = (
+        f"人物候选: {', '.join(entities.get('characters', [])) or '无'}\n"
+        f"场景候选: {', '.join(entities.get('scenes', [])) or '无'}\n"
+        f"物品候选: {', '.join(entities.get('props', [])) or '无'}"
+    )
+    extra = user_prompt.strip() if isinstance(user_prompt, str) else ""
+    system_prompt = (
+        "你是一名专业影视分镜编剧与导演，熟悉真实影视拍摄与剪辑逻辑。\n\n"
+        "请将我提供的剧本拆分为多个分镜，并严格遵守以下规则：\n\n"
+        "【整体分镜规则】\n"
+        "1. 每个分镜约 10–18 秒，平均约 15 秒\n"
+        "2. 每个分镜只对应一个镜头（不切机位）\n"
+        "3. 每个分镜的场景必须是“动态场景”，至少包含一种持续变化的环境元素，例如：\n"
+        "   - 云层缓慢流动\n"
+        "   - 风吹动人物头发或衣角\n"
+        "   - 雾气、烟尘、光影变化\n"
+        "4. 全部内容必须可视化，不允许心理描写或抽象描述\n\n"
+        "【镜头类型规则】\n"
+        "1. 远景镜头仅用于交代空间，全片远景不超过 2 个\n"
+        "2. 大部分分镜使用中景和近景\n"
+        "3. 情绪、动作、对话以中景 / 近景完成\n\n"
+        "【人物对话与机位规则】\n"
+        "1. 人物对话场景中：\n"
+        "   - 约 30% 的对话使用“背后过肩镜头（OTS）”\n"
+        "2. 过肩镜头定义为：\n"
+        "   - 两名人物处于同一空间\n"
+        "   - 镜头位于其中一人背后或肩部后方\n"
+        "   - 画面前景可看到该人物的肩部或背部轮廓\n"
+        "   - 正在说话的人面对镜头进行对白\n"
+        "3. 不要所有对话都使用正面镜头，合理穿插过肩镜头以增强真实交流感\n\n"
+        "【分镜内部秒级拆分规则】\n"
+        "1. 每个分镜内部拆分为 3–5 个连续时间段，例如：\n"
+        "   - 0s–3s\n"
+        "   - 3s–7s\n"
+        "   - 7s–12s\n"
+        "   - 12s–15s\n"
+        "2. 每个时间段只描述一个清晰、可被画面直接看到的动作或变化\n"
+        "3. 时间段必须首尾连续，不跳秒、不重叠\n\n"
+        "【分镜输出格式（严格遵守）】\n"
+        "分镜 X：\n"
+        "- 总时长：Xs–Xs\n"
+        "- 镜头类型：远景 / 中景 / 近景 / 特写（如为过肩镜头请标注）\n"
+        "- 场景动态元素：明确写出（如云动 / 风动 / 雾动等）\n"
+        "- 分镜内容：\n"
+        "  - 0s–3s：……\n"
+        "  - 3s–7s：……\n"
+        "  - 7s–12s：……\n"
+        "  - 12s–15s：……\n\n"
+        "最终返回时仅输出 JSON 数组，不要解释，不要 markdown。"
+        "每个数组元素字段必须是：time_range, characters(数组), scene_desc, props(数组), prompt。"
+        "同时建议额外输出：shot_type, dynamic_elements(数组), beats(数组)。"
+        "beats 数组每项格式为 {start,end,content}。"
+        "其中 scene_desc 需要包含镜头类型、动态场景元素和分镜内容；"
+        "prompt 需要包含可直接用于生成画面的分镜描述。"
+        "characters 和 props 请尽量使用给定候选名称。"
+    )
+    user_content = (
+        f"{entity_text}\n\n"
+        f"用户补充要求: {extra or '无'}\n\n"
+        f"剧本文本:\n{script_text}"
+    )
+    content = _call_model(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=0.2,
+    )
     rows = _extract_json_block(content)
     if not isinstance(rows, list):
-        raise RuntimeError("模型返回格式异常，未得到 JSON 数组")
+        raise RuntimeError("分镜解析格式异常，未得到 JSON 数组")
     normalized = []
     for row in rows:
         item = _normalize_scene_item(row)
@@ -198,11 +441,6 @@ def _save_upload_and_maybe_cos(request, upload, subdir):
 
 
 class ScriptHealthAPIView(APIView):
-    """
-    Script.app entry placeholder.
-    Future script-analysis APIs should live under this app.
-    """
-
     def get(self, request):
         return Response({"msg": "script.app ready"})
 
@@ -243,7 +481,7 @@ def upload_script(request):
 
 
 @api_view(["POST"])
-def parse_script(request, script_id):
+def extract_entities(request, script_id):
     user = _resolve_user(request)
     if not user:
         return Response({"msg": "未登录"}, status=401)
@@ -251,7 +489,35 @@ def parse_script(request, script_id):
     if script.user_id and script.user_id != user.id:
         return Response({"msg": "无权限访问该剧本"}, status=403)
     try:
-        parsed = _parse_script_with_ai(script.content)
+        entities = _extract_entities_with_ai(script.content)
+    except requests.Timeout:
+        return Response({"msg": "实体提取超时，请重试"}, status=504)
+    except Exception as exc:
+        return Response({"msg": str(exc)}, status=502)
+    return Response({"script_id": script.id, "title": script.title, **entities})
+
+
+@api_view(["POST"])
+def parse_script(request, script_id):
+    user = _resolve_user(request)
+    if not user:
+        return Response({"msg": "未登录"}, status=401)
+    script = get_object_or_404(Script, id=script_id)
+    if script.user_id and script.user_id != user.id:
+        return Response({"msg": "无权限访问该剧本"}, status=403)
+
+    user_prompt = (request.data.get("user_prompt") or "").strip()
+    character_images = _normalize_image_map(_parse_dict_maybe(request.data.get("character_images")))
+    scene_images = _normalize_image_map(_parse_dict_maybe(request.data.get("scene_images")))
+    prop_images = _normalize_image_map(_parse_dict_maybe(request.data.get("prop_images")))
+    entities = {
+        "characters": list(character_images.keys()),
+        "scenes": list(scene_images.keys()),
+        "props": list(prop_images.keys()),
+    }
+
+    try:
+        parsed = _parse_script_with_ai(script.content, user_prompt, entities)
     except requests.Timeout:
         return Response({"msg": "模型解析超时，请重试"}, status=504)
     except Exception as exc:
@@ -264,11 +530,13 @@ def parse_script(request, script_id):
             ScriptScene(
                 script=script,
                 time_range=item["time_range"],
-                characters=item["characters"],
                 scene_desc=item["scene_desc"],
                 prompt=item["prompt"],
-                scene_image_url=item["scene_image_url"],
-                character_images={name: "" for name in item["characters"]},
+                characters=item["characters"],
+                props=item["props"],
+                character_images={name: character_images.get(name, "") for name in item["characters"] if character_images.get(name)},
+                prop_images={name: prop_images.get(name, "") for name in item["props"] if prop_images.get(name)},
+                scene_image_url=_match_scene_image(item["scene_desc"], scene_images),
             )
         )
     ScriptScene.objects.bulk_create(rows)
@@ -311,39 +579,37 @@ def update_scene(request, scene_id):
         return Response({"msg": "无权限修改该分镜"}, status=403)
 
     prompt = request.data.get("prompt")
-    user_remark = request.data.get("user_remark")
-    scene_image_url = request.data.get("scene_image_url")
-    character_images = request.data.get("character_images")
-    characters = request.data.get("characters")
     scene_desc = request.data.get("scene_desc")
+    scene_image_url = request.data.get("scene_image_url")
+    characters = request.data.get("characters")
+    character_images = request.data.get("character_images")
+    props = request.data.get("props")
+    prop_images = request.data.get("prop_images")
 
     if prompt is not None:
         scene.prompt = str(prompt).strip()
-    if user_remark is not None:
-        scene.user_remark = str(user_remark).strip()
-    if scene_image_url is not None:
-        scene.scene_image_url = str(scene_image_url).strip()
     if scene_desc is not None:
         scene.scene_desc = str(scene_desc).strip()
+    if scene_image_url is not None:
+        scene.scene_image_url = str(scene_image_url).strip()
     if isinstance(characters, list):
-        scene.characters = [str(name).strip() for name in characters if str(name).strip()]
+        scene.characters = _normalize_name_list(characters)
     if isinstance(character_images, dict):
-        cleaned = {}
-        for key, value in character_images.items():
-            k = str(key).strip()
-            if not k:
-                continue
-            cleaned[k] = str(value or "").strip()
-        scene.character_images = cleaned
+        scene.character_images = _normalize_image_map(character_images)
+    if isinstance(props, list):
+        scene.props = _normalize_name_list(props)
+    if isinstance(prop_images, dict):
+        scene.prop_images = _normalize_image_map(prop_images)
 
     scene.save(
         update_fields=[
             "prompt",
-            "user_remark",
-            "scene_image_url",
             "scene_desc",
+            "scene_image_url",
             "characters",
             "character_images",
+            "props",
+            "prop_images",
             "updated_at",
         ]
     )
