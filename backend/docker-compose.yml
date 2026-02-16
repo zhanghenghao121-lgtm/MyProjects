@@ -50,6 +50,8 @@ services:
     volumes:
       - static_data:/app/static
       - media_data:/app/media
+    ports:
+      - "127.0.0.1:8000:8000"
 
   nginx:
     image: nginx:1.27-alpine
