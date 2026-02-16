@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+import warnings
+from django.utils.crypto import get_random_string
 from corsheaders.defaults import default_headers
 from dotenv import load_dotenv
 load_dotenv()
@@ -24,11 +26,24 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-key')
+def _env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() == "true"
+DEBUG = _env_bool("DJANGO_DEBUG", False)
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = (os.environ.get('DJANGO_SECRET_KEY') or '').strip()
+if not SECRET_KEY:
+    SECRET_KEY = get_random_string(64)
+    warnings.warn(
+        "DJANGO_SECRET_KEY is not set. A temporary random key is being used; "
+        "set DJANGO_SECRET_KEY for stable sessions and production deployments.",
+        RuntimeWarning,
+    )
 
 ALLOWED_HOSTS = [
     h.strip()
@@ -199,12 +214,22 @@ CHANNEL_LAYERS = {
 }
 
 # Allow session/CSRF cookies to be sent with cross-site AJAX (frontend on different port).
-SESSION_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SAMESITE = 'None'
+SESSION_COOKIE_SAMESITE = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
+CSRF_COOKIE_SAMESITE = os.environ.get('CSRF_COOKIE_SAMESITE', 'Lax')
 
-# Dev over HTTP; set to True if you serve over HTTPS in production.
-SESSION_COOKIE_SECURE = False
-CSRF_COOKIE_SECURE = False
+# Cookie/security headers
+SESSION_COOKIE_SECURE = _env_bool('SESSION_COOKIE_SECURE', not DEBUG)
+CSRF_COOKIE_SECURE = _env_bool('CSRF_COOKIE_SECURE', not DEBUG)
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = _env_bool('CSRF_COOKIE_HTTPONLY', True)
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+X_FRAME_OPTIONS = 'DENY'
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+if not DEBUG:
+    SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', True)
+    SECURE_HSTS_PRELOAD = _env_bool('SECURE_HSTS_PRELOAD', False)
 
 AUTH_USER_MODEL = 'users.User'
 ASGI_APPLICATION='backend.asgi.application'
@@ -219,10 +244,10 @@ QBT_DOWNLOAD_DIR = os.environ.get('QBT_DOWNLOAD_DIR', '')
 # Email
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.163.com')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 465))
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'zhh_2000512@163.com')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'TUbaaCK5ybySErz9')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'True') == 'True'
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'False') == 'True'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', f'Your App <{EMAIL_HOST_USER}>')
 if not DEFAULT_FROM_EMAIL:
-    DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+    DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'no-reply@example.com'

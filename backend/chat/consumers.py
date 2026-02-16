@@ -1,5 +1,5 @@
 import json
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -24,6 +24,16 @@ def _abs_url(url: str) -> str:
     if not url.startswith('/'):
         url = '/' + url
     return _public_base_url() + url
+
+
+def _is_safe_image_url(url: str) -> bool:
+    raw = (url or '').strip()
+    if not raw:
+        return False
+    if raw.startswith('/media/'):
+        return True
+    parsed = urlparse(raw)
+    return parsed.scheme in {'http', 'https'} and bool(parsed.netloc)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -108,6 +118,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if not image_url:
                 return
             if len(image_url) > 1000:
+                return
+            if not _is_safe_image_url(image_url):
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'code': 'invalid_image_url',
+                    'message': '图片地址不合法',
+                }))
                 return
             msg = await self._create_image_message(image_url, reply_preview)
             await self.channel_layer.group_send(

@@ -37,7 +37,7 @@ class SkillsLeaderboardAPIView(APIView):
             resp = requests.get(target, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
             resp.raise_for_status()
             html = resp.text
-        except Exception as exc:
+        except Exception:
             # 留到后面的本地兜底
             html = ""
 
@@ -182,9 +182,9 @@ class GithubHotProjectsAPIView(APIView):
             backup = cache.get(backup_key)
             if backup:
                 backup["stale"] = True
-                backup["msg"] = f"GitHub 拉取失败，已返回缓存: {exc}"
+                backup["msg"] = "GitHub 拉取失败，已返回最近缓存结果"
                 return Response(backup)
-            return Response({"msg": f"GitHub 拉取失败: {exc}"}, status=502)
+            return Response({"msg": "GitHub 拉取失败，请稍后重试"}, status=502)
 
     def _safe_int(self, raw, default, min_v, max_v):
         try:

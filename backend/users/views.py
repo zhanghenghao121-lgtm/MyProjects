@@ -14,6 +14,8 @@ import random
 import io
 import base64
 import re
+import hashlib
+from secrets import compare_digest
 from PIL import Image, ImageDraw, ImageFont
 from django.middleware.csrf import get_token
 from django.core.signing import TimestampSigner, BadSignature, SignatureExpired
@@ -29,6 +31,35 @@ CAPTCHA_SESSION_FALLBACK = os.environ.get('CAPTCHA_SESSION_FALLBACK', 'false').l
 
 def _normalize_email(email):
     return (email or '').strip().lower()
+
+
+def _client_ip(request):
+    forwarded = (request.META.get('HTTP_X_FORWARDED_FOR') or '').strip()
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return (request.META.get('REMOTE_ADDR') or 'unknown').strip()
+
+
+def _rate_limit_key(scope, identifier):
+    digest = hashlib.sha256(f"{scope}:{identifier}".encode('utf-8')).hexdigest()[:32]
+    return f"rate_limit:{scope}:{digest}"
+
+
+def _is_rate_limited(scope, identifier, limit, window_seconds):
+    key = _rate_limit_key(scope, identifier)
+    added = cache.add(key, 1, timeout=window_seconds)
+    if added:
+        return False
+    try:
+        count = cache.incr(key)
+    except Exception:
+        cache.set(key, 1, timeout=window_seconds)
+        return False
+    return count > limit
+
+
+def _too_many_requests(message='请求过于频繁，请稍后重试'):
+    return Response({'msg': message}, status=429)
 
 
 def _email_code_key(purpose, email, username=''):
@@ -107,6 +138,10 @@ def register(request):
     email = _normalize_email(request.data.get('email'))
     email_code = (request.data.get('email_code') or '').strip()
 
+    ip = _client_ip(request)
+    if _is_rate_limited('register_ip', ip, limit=15, window_seconds=300):
+        return _too_many_requests()
+
     if not username or not password or not email or not email_code:
         return Response({'msg': '请填写完整信息'}, status=400)
 
@@ -123,7 +158,7 @@ def register(request):
         return Response({'msg': '邮箱已被使用'}, status=400)
 
     cached_code = cache.get(_email_code_key('register', email))
-    if not cached_code or email_code != str(cached_code):
+    if not cached_code or not compare_digest(email_code, str(cached_code)):
         return Response({'msg': '邮箱验证码错误或已过期'}, status=400)
 
     User.objects.create_user(
@@ -142,6 +177,12 @@ def login_view(request):
     password = request.data.get('password')
     captcha = request.data.get('captcha')
     captcha_token = request.data.get('captchaToken')
+
+    ip = _client_ip(request)
+    if _is_rate_limited('login_ip', ip, limit=20, window_seconds=300):
+        return _too_many_requests('登录请求过于频繁，请稍后重试')
+    if _is_rate_limited('login_user', username or '', limit=10, window_seconds=300):
+        return _too_many_requests('登录请求过于频繁，请稍后重试')
 
     if not _is_valid_username(username):
         return Response({'msg': '用户名格式不正确'}, status=400)
@@ -252,6 +293,10 @@ def logout_view(request):
 @api_view(['GET'])
 def captcha(request):
     """生成数字验证码并以 base64 图片返回，同时将验证码存入 session。"""
+    ip = _client_ip(request)
+    if _is_rate_limited('captcha_ip', ip, limit=30, window_seconds=60):
+        return _too_many_requests('验证码请求过于频繁，请稍后再试')
+
     code = ''.join(random.choices('0123456789', k=4))
     # Default flow uses signed captchaToken to avoid DB session dependency.
     if CAPTCHA_SESSION_FALLBACK:
@@ -298,12 +343,17 @@ def csrf(request):
 @api_view(['POST'])
 def send_register_email_code(request):
     email = _normalize_email(request.data.get('email'))
+    ip = _client_ip(request)
+    if _is_rate_limited('email_register_ip', ip, limit=10, window_seconds=300):
+        return _too_many_requests('验证码发送过于频繁，请稍后再试')
     if not email:
         return Response({'msg': '邮箱不能为空'}, status=400)
     if not _is_valid_email(email):
         return Response({'msg': '邮箱格式不正确，需以 .com 结尾'}, status=400)
     if User.objects.filter(email=email).exists():
         return Response({'msg': '邮箱已被使用'}, status=400)
+    if _is_rate_limited('email_register_target', email, limit=1, window_seconds=60):
+        return _too_many_requests('同一邮箱验证码发送过于频繁，请稍后再试')
     try:
         _send_email_code('register', email)
     except Exception:
@@ -315,21 +365,22 @@ def send_register_email_code(request):
 def send_reset_email_code(request):
     username = (request.data.get('username') or '').strip()
     email = _normalize_email(request.data.get('email'))
+    ip = _client_ip(request)
+    if _is_rate_limited('email_reset_ip', ip, limit=10, window_seconds=300):
+        return _too_many_requests('验证码发送过于频繁，请稍后再试')
     if not username or not email:
         return Response({'msg': '用户名和邮箱不能为空'}, status=400)
     if not _is_valid_username(username):
         return Response({'msg': '用户名格式不正确'}, status=400)
     if not _is_valid_email(email):
         return Response({'msg': '邮箱格式不正确，需以 .com 结尾'}, status=400)
+    if _is_rate_limited('email_reset_target', f'{username}:{email}', limit=1, window_seconds=60):
+        return _too_many_requests('同一账号验证码发送过于频繁，请稍后再试')
+
     user = User.objects.filter(username=username).first()
-    if not user:
-        return Response({'msg': '用户不存在'}, status=404)
-    if not user.email:
-        random_email = f"{random.randint(100000000, 999999999)}@163.com"
-        user.email = random_email
-        user.save(update_fields=['email'])
-    if _normalize_email(user.email) != email:
-        return Response({'msg': '用户名和邮箱不匹配'}, status=400)
+    if not user or _normalize_email(user.email) != email:
+        # 避免暴露用户是否存在，统一返回成功提示。
+        return Response({'msg': '若用户名和邮箱匹配，验证码将发送，请注意查收'})
     try:
         _send_email_code('reset', email, username)
     except Exception:
@@ -343,6 +394,10 @@ def reset_password(request):
     email = _normalize_email(request.data.get('email'))
     new_password = (request.data.get('new_password') or '').strip()
     email_code = (request.data.get('email_code') or '').strip()
+
+    ip = _client_ip(request)
+    if _is_rate_limited('reset_password_ip', ip, limit=20, window_seconds=300):
+        return _too_many_requests('重置请求过于频繁，请稍后再试')
 
     if not username or not email or not new_password or not email_code:
         return Response({'msg': '请填写完整信息'}, status=400)
@@ -360,7 +415,7 @@ def reset_password(request):
         return Response({'msg': '用户名和邮箱不匹配'}, status=400)
 
     cached_code = cache.get(_email_code_key('reset', email, username))
-    if not cached_code or email_code != str(cached_code):
+    if not cached_code or not compare_digest(email_code, str(cached_code)):
         return Response({'msg': '邮箱验证码错误或已过期'}, status=400)
 
     user.set_password(new_password)
